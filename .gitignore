@@ -1,0 +1,14 @@
+# ログ・一時ファイル
+*.log
+client_out.jpg
+srv.log
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# OS
+.DS_Store
+Thumbs.db

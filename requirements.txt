@@ -1,0 +1,9 @@
+# GPU側 (StreamDiffusion サーバー) の依存。
+# StreamDiffusion 本体は別途 `pip install -e .` すること (cumulo-autumn/StreamDiffusion)。
+# 下記は sd_ws_server.py を動かすための追加・固定分。
+websockets>=12.0
+pillow
+numpy<2                 # torch が numpy 2.x 非対応
+huggingface_hub==0.24.6 # diffusers 0.24 が cached_download を要求
+# xformers               # GPU/CUDA に合わせて別途インストール
+# torch                  # CUDA版を環境に合わせて別途 (例: torch==2.1.0+cu121)
