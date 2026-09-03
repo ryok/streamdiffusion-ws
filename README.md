@@ -100,6 +100,10 @@ ssh -N -L 8765:localhost:8765 gpu-host
 
 - [hand-trail-ai](https://github.com/ryok/hand-trail-ai) — TouchDesigner の手トレイルをこのサーバーでAI変換
 
+## 解説記事
+
+[手の軌跡をAIで塗り替える：TouchDesignerでリアルタイム Hand Tracking × AI Trails を作る](https://zenn.dev/ryok/articles/touchdesigner-hand-trail-ai)（Zenn）— このサーバーを自作した経緯と、asyncio内warmupのサイレントクラッシュ等の落とし穴。
+
 ## ライセンス
 
 MIT
