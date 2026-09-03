@@ -62,19 +62,39 @@ def pil_to_b64(img: Image.Image) -> str:
     return base64.b64encode(buf.getvalue()).decode("ascii")
 
 
-async def handler(ws, stream, size):
+async def handler(ws, stream, state):
+    size = state["size"]
     print(f"[ws] client connected: {ws.remote_address}")
     try:
         async for message in ws:
             t0 = time.time()
-            # 受信: base64 JPEG (先頭に "PROMPT:" が来たらプロンプト更新)
+            # 制御メッセージ: "PROMPT:<text>" プロンプト差替 / "TINDEX:<a>,<b>" スタイル強度
             if message.startswith("PROMPT:"):
-                new_prompt = message[len("PROMPT:"):]
-                stream.prepare(prompt=new_prompt,
-                               negative_prompt="low quality, blurry",
+                state["prompt"] = message[len("PROMPT:"):]
+                stream.prepare(prompt=state["prompt"],
+                               negative_prompt=state["negative"],
                                num_inference_steps=50, guidance_scale=1.2)
                 await ws.send("OK:prompt updated")
-                print(f"[ws] prompt -> {new_prompt}")
+                print(f"\n[ws] prompt -> {state['prompt']}")
+                continue
+
+            if message.startswith("TINDEX:"):
+                # t_index をライブ変更(値のみ・要素数は固定)。小さいほどAI解釈が強い
+                try:
+                    vals = [int(x) for x in message[len("TINDEX:"):].replace(" ", "").split(",") if x != ""]
+                except ValueError:
+                    await ws.send("ERR:tindex parse")
+                    continue
+                n = len(stream.stream.t_list)
+                if len(vals) != n:
+                    await ws.send(f"ERR:tindex needs {n} values")
+                    continue
+                stream.stream.t_list = vals
+                stream.prepare(prompt=state["prompt"],
+                               negative_prompt=state["negative"],
+                               num_inference_steps=50, guidance_scale=1.2)
+                await ws.send(f"OK:tindex {vals}")
+                print(f"\n[ws] t_index -> {vals}")
                 continue
 
             img = b64_to_pil(message, size)
@@ -89,7 +109,9 @@ async def handler(ws, stream, size):
 
 
 async def main(args, stream):
-    async with websockets.serve(lambda ws: handler(ws, stream, args.size),
+    state = {"size": args.size, "prompt": args.prompt,
+             "negative": "low quality, blurry, distorted"}
+    async with websockets.serve(lambda ws: handler(ws, stream, state),
                                 args.host, args.port, max_size=8 * 1024 * 1024):
         print(f"[server] listening on ws://{args.host}:{args.port}  prompt='{args.prompt}'", flush=True)
         await asyncio.Future()  # run forever
