@@ -1,50 +1,58 @@
 # streamdiffusion-ws
 
-[StreamDiffusion](https://github.com/cumulo-autumn/StreamDiffusion) の img2img を
-**WebSocket サーバー**として常駐させ、任意のクライアントから base64 JPEG フレームを
-送って準リアルタイムに変換して返す最小ブリッジ。
+*[日本語版はこちら / Japanese version](README.ja.md)*
 
-TouchDesigner・Unity・Max/MSP・Processing・Web など、WebSocket を喋れれば
-どこからでも使える（[StreamDiffusionTD](https://github.com/DotSimulate/StreamDiffusion-TD) の
-自作・クライアント非依存版という位置づけ）。
+A minimal WebSocket bridge that keeps [StreamDiffusion](https://github.com/cumulo-autumn/StreamDiffusion)
+img2img resident on a GPU box. Send a base64 JPEG frame, get a stylized frame back,
+near real time.
 
-## しくみ
+Any client that speaks WebSocket can drive it — TouchDesigner, Unity, Max/MSP,
+Processing, a web app. Think of it as a client-agnostic, roll-your-own alternative to
+[StreamDiffusionTD](https://github.com/DotSimulate/StreamDiffusion-TD)
+(which requires NVIDIA + TensorRT and a TouchDesigner-side operator).
 
-- 起動時に StreamDiffusion(sd-turbo, img2img) を1回だけGPUに載せて常駐
-- WebSocket でフレームを受信 → img2img → 返信
-- プロンプトは実行中にライブ差し替え可能
+## How it works
 
-## ワイヤープロトコル
+- The model (sd-turbo, img2img) is loaded onto the GPU **once at startup** and stays resident
+- Each WebSocket message is one frame: receive → img2img → send back
+- The prompt and the style strength can be swapped **live**, without reloading the model
 
-WebSocket テキストメッセージ1本 = 1フレーム。
+## Wire protocol
 
-| 送信(クライアント→サーバー) | 返信(サーバー→クライアント) |
+One WebSocket **text** message = one frame.
+
+| Client → Server | Server → Client |
 |---|---|
-| base64 エンコードした JPEG（`--size` 正方形推奨） | 変換後の base64 JPEG |
-| `PROMPT:<新しいプロンプト>` | `OK:prompt updated` |
-| `TINDEX:<a>,<b>` スタイル強度をライブ変更 | `OK:tindex [a, b]` / `ERR:...` |
+| base64-encoded JPEG (square, matching `--size`) | base64-encoded JPEG of the result |
+| `PROMPT:<new prompt>` | `OK:prompt updated` |
+| `TINDEX:<a>,<b>` — change style strength live | `OK:tindex [a, b]` / `ERR:...` |
 
-`TINDEX:` は `--t-index` の値を実行中に差し替える（小さいほどAI解釈が強い）。
-**要素数は起動時と同じ**でなければならない（既定は2個。例 `TINDEX:16,28`）。
-内部で `t_list` を書き換えて `prepare()` し直すだけなのでモデル再ロードは無く軽い。
+Notes:
 
-- バイナリではなく **base64 テキスト**（`max_size` 8MB）
-- 1フレームずつのリクエスト/レスポンス。**前の返信を待ってから次を送る**(in-flightは1)のが安全
-- 初回フレームだけ CUDA カーネルの JIT で数秒、以降は定常
+- Text (base64), not binary frames. `max_size` is 8 MB.
+- **One request in flight at a time.** Wait for the reply before sending the next frame —
+  the server processes sequentially, and queueing more only adds latency.
+- The first frame takes a few seconds (CUDA kernel JIT); after that it is steady.
+- `TINDEX:` replaces the `--t-index` values at runtime. **Lower values = the AI
+  reinterprets the input more aggressively.** The list length must match startup
+  (2 by default, e.g. `TINDEX:16,28`) — internally it swaps `t_list` and re-runs
+  `prepare()`, so there is no model reload.
 
-## セットアップ (GPUマシン)
+## Setup (on the GPU machine)
 
 ```bash
 git clone https://github.com/cumulo-autumn/StreamDiffusion.git
 cd StreamDiffusion
 python -m venv .venv && .venv/bin/pip install -e .
-.venv/bin/pip install -r <このリポジトリ>/requirements.txt
-cp <このリポジトリ>/sd_ws_server.py .   # utils.wrapper を import するため StreamDiffusion 直下に置く
+.venv/bin/pip install -r <this repo>/requirements.txt
+cp <this repo>/sd_ws_server.py .   # must sit next to StreamDiffusion so `utils.wrapper` imports
 ```
 
-依存の地雷: `numpy<2`(torchが2.x非対応) / `huggingface_hub==0.24.6`(diffusers 0.24 が cached_download 要求) / xformers 用 `setuptools`。
+Dependency landmines worth pinning: `numpy<2` (torch is not 2.x-ready),
+`huggingface_hub==0.24.6` (diffusers 0.24 still calls `cached_download`),
+and `setuptools` for xformers.
 
-## 起動
+## Run
 
 ```bash
 CUDA_VISIBLE_DEVICES=0 python -u sd_ws_server.py \
@@ -52,22 +60,21 @@ CUDA_VISIBLE_DEVICES=0 python -u sd_ws_server.py \
   --prompt "flowing ink wash painting, glowing smoke, elegant" --port 8765
 ```
 
-主なオプション:
-
-| フラグ | 既定 | 説明 |
+| Flag | Default | Description |
 |---|---|---|
-| `--model` | `stabilityai/sd-turbo` | img2imgモデル |
-| `--size` | 512 | 入出力の正方形サイズ |
-| `--t-index` | `22 32` | ノイズ強度。**小さいほどAIの再解釈が強い**（形が崩れやすい）／大きいほど入力に忠実 |
-| `--acceleration` | `xformers` | `none`/`xformers`/`tensorrt` |
-| `--prompt` | (下記) | 初期プロンプト |
-| `--port` | 8765 | 待受ポート |
+| `--model` | `stabilityai/sd-turbo` | img2img model |
+| `--size` | 512 | square input/output size |
+| `--t-index` | `22 32` | denoising strength. **Lower = stronger AI reinterpretation** (shape drifts); higher = faithful to the input |
+| `--acceleration` | `xformers` | `none` / `xformers` / `tensorrt` |
+| `--prompt` | see above | initial prompt |
+| `--port` | 8765 | listen port |
 
-> ⚠️ モデル構築(warmup)は必ず `asyncio.run()` の**外**(同期)で行うこと。イベントループ内で
-> warmup を回すと、CUDAストリーム同期と干渉してトレースバック無しでサイレントクラッシュする。
-> 本実装は `build_stream()` を `asyncio.run()` の前に呼んでいる。
+> ⚠️ **Build the model outside `asyncio.run()`.** Running warmup inside the event loop
+> made the process die during warmup with no traceback at all — CUDA stream sync
+> interfering with the loop. This implementation calls `build_stream()` before
+> `asyncio.run()`, and the silent crash disappeared completely.
 
-## tmuxで常駐（推奨）
+## Keep it resident with tmux
 
 ```bash
 ssh gpu-host 'tmux new-session -d -s sd "cd ~/StreamDiffusion && \
@@ -75,35 +82,42 @@ ssh gpu-host 'tmux new-session -d -s sd "cd ~/StreamDiffusion && \
   --size 512 --acceleration xformers --t-index 22 32 --port 8765 > ~/srv.log 2>&1"'
 ```
 
-> ⚠️ `pkill -f sd_ws_server.py` は使わない。`-f` が SSH の自シェル(`bash -c '...sd_ws_server.py...'`)に
-> マッチしてセッションごと落ち(exit 255)、原因不明のまま詰まる。停止は `tmux kill-session -t sd`。
+> ⚠️ **Never use `pkill -f sd_ws_server.py`.** Over SSH, `-f` matches your own shell
+> (`bash -c '...sd_ws_server.py...'`) and kills the session itself — you get exit 255
+> with zero output, indistinguishable from a network failure. Stop it with
+> `tmux kill-session -t sd`.
 
-## 疎通テスト
+## Smoke test
 
 ```bash
-python3 test_client.py   # ダミーフレームを3枚往復し client_out.jpg を保存
+python3 test_client.py   # sends 3 dummy frames, saves client_out.jpg
 ```
 
-## リモートGPUを使う場合
+## Using a remote GPU
 
-Mac 等ローカルのクライアントからは SSH トンネルで繋ぐ:
+From a local client (e.g. a Mac), tunnel the port:
+
 ```bash
 ssh -N -L 8765:localhost:8765 gpu-host
 ```
 
-## 実測レイテンシ (512px, t_index=[22,32], xformers, RTX 6000 Ada)
+## Measured latency (512px, t_index=[22,32], xformers, RTX 6000 Ada)
 
-- 初回: ~7.3s（CUDAカーネルJIT）
-- 定常: GPU推論 ~55ms。SSHトンネル経由の往復込みで ~0.3s/frame(≒3-4fps)
+- First frame: ~7.3 s (CUDA kernel JIT)
+- Steady state: ~55 ms of GPU inference; ~0.3 s/frame (3–4 fps) round trip including
+  the SSH tunnel and JPEG/base64 encoding
 
-## 利用例
+## Used by
 
-- [hand-trail-ai](https://github.com/ryok/hand-trail-ai) — TouchDesigner の手トレイルをこのサーバーでAI変換
+- [hand-trail-ai](https://github.com/ryok/hand-trail-ai) — repaints a MediaPipe hand
+  trail in TouchDesigner into a dragon, a phoenix, whatever you prompt
 
-## 解説記事
+## Write-up
 
-[手の軌跡をAIで塗り替える：TouchDesignerでリアルタイム Hand Tracking × AI Trails を作る](https://zenn.dev/ryok/articles/touchdesigner-hand-trail-ai)（Zenn）— このサーバーを自作した経緯と、asyncio内warmupのサイレントクラッシュ等の落とし穴。
+[手の軌跡をAIで塗り替える：TouchDesignerでリアルタイム Hand Tracking × AI Trails を作る](https://zenn.dev/ryok/articles/touchdesigner-hand-trail-ai)
+(Japanese) — why I built this instead of paying for a hosted service, and the pitfalls
+along the way.
 
-## ライセンス
+## License
 
 MIT
