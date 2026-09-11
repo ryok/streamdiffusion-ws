@@ -35,15 +35,15 @@ def build_stream(args):
         acceleration=args.acceleration,  # 'xformers' or 'tensorrt' or 'none'
         mode="img2img",
         use_denoising_batch=True,
-        cfg_type="self",
+        cfg_type=args.cfg_type,          # "self"/"full"/"initialize"/"none"（S5でプロンプトの効きを掃引）
         seed=args.seed,
         output_type="pil",               # 戻り値をPILにして後処理不要
     )
     stream.prepare(
         prompt=args.prompt,
         negative_prompt="low quality, blurry, distorted",
-        num_inference_steps=50,
-        guidance_scale=1.2,
+        num_inference_steps=args.steps,
+        guidance_scale=args.guidance_scale,
     )
     return stream
 
@@ -73,7 +73,8 @@ async def handler(ws, stream, state):
                 state["prompt"] = message[len("PROMPT:"):]
                 stream.prepare(prompt=state["prompt"],
                                negative_prompt=state["negative"],
-                               num_inference_steps=50, guidance_scale=1.2)
+                               num_inference_steps=state["steps"],
+                               guidance_scale=state["guidance"])
                 await ws.send("OK:prompt updated")
                 print(f"\n[ws] prompt -> {state['prompt']}")
                 continue
@@ -92,7 +93,8 @@ async def handler(ws, stream, state):
                 stream.stream.t_list = vals
                 stream.prepare(prompt=state["prompt"],
                                negative_prompt=state["negative"],
-                               num_inference_steps=50, guidance_scale=1.2)
+                               num_inference_steps=state["steps"],
+                               guidance_scale=state["guidance"])
                 await ws.send(f"OK:tindex {vals}")
                 print(f"\n[ws] t_index -> {vals}")
                 continue
@@ -110,7 +112,8 @@ async def handler(ws, stream, state):
 
 async def main(args, stream):
     state = {"size": args.size, "prompt": args.prompt,
-             "negative": "low quality, blurry, distorted"}
+             "negative": "low quality, blurry, distorted",
+             "steps": args.steps, "guidance": args.guidance_scale}
     async with websockets.serve(lambda ws: handler(ws, stream, state),
                                 args.host, args.port, max_size=8 * 1024 * 1024):
         print(f"[server] listening on ws://{args.host}:{args.port}  prompt='{args.prompt}'", flush=True)
@@ -125,6 +128,13 @@ def parse_args():
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--acceleration", default="xformers", choices=["none", "xformers", "tensorrt"])
     ap.add_argument("--t-index", type=int, nargs="+", default=[22, 32])
+    # S5でプロンプトの効き/画作りを掃引するための実験パラメータ
+    ap.add_argument("--guidance-scale", type=float, default=1.2,
+                    help="CFGスケール。sd-turboは1.0前提だが、プロンプトを効かせたい時は3〜7を試す")
+    ap.add_argument("--cfg-type", default="self", choices=["none", "full", "self", "initialize"],
+                    help="分類器フリーガイダンスの経路。プロンプト条件付けの効きが変わる")
+    ap.add_argument("--steps", type=int, default=50,
+                    help="num_inference_steps。sd-turboは少ステップ前提なので t_index と整合させる")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8765)
     return ap.parse_args()
