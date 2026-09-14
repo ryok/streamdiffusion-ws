@@ -56,9 +56,9 @@ def b64_to_pil(b64: str, size: int) -> Image.Image:
     return img
 
 
-def pil_to_b64(img: Image.Image) -> str:
+def pil_to_b64(img: Image.Image, quality: int = 85) -> str:
     buf = io.BytesIO()
-    img.save(buf, format="JPEG", quality=85)
+    img.save(buf, format="JPEG", quality=quality)
     return base64.b64encode(buf.getvalue()).decode("ascii")
 
 
@@ -103,7 +103,7 @@ async def handler(ws, stream, state):
             # img2img 実行 (output_type='pil' なので戻り値はPIL画像)
             out = stream(image=img)
             out_img = out if isinstance(out, Image.Image) else out[0]
-            await ws.send(pil_to_b64(out_img))
+            await ws.send(pil_to_b64(out_img, state["out_quality"]))
             dt = (time.time() - t0) * 1000
             print(f"[ws] frame processed {dt:.0f}ms ({1000/dt:.1f} fps)", end="\r")
     except websockets.ConnectionClosed:
@@ -113,7 +113,8 @@ async def handler(ws, stream, state):
 async def main(args, stream):
     state = {"size": args.size, "prompt": args.prompt,
              "negative": "low quality, blurry, distorted",
-             "steps": args.steps, "guidance": args.guidance_scale}
+             "steps": args.steps, "guidance": args.guidance_scale,
+             "out_quality": args.out_quality}
     async with websockets.serve(lambda ws: handler(ws, stream, state),
                                 args.host, args.port, max_size=8 * 1024 * 1024):
         print(f"[server] listening on ws://{args.host}:{args.port}  prompt='{args.prompt}'", flush=True)
@@ -135,6 +136,9 @@ def parse_args():
                     help="分類器フリーガイダンスの経路。プロンプト条件付けの効きが変わる")
     ap.add_argument("--steps", type=int, default=50,
                     help="num_inference_steps。sd-turboは少ステップ前提なので t_index と整合させる")
+    ap.add_argument("--out-quality", type=int, default=85,
+                    help="返信JPEG品質。TDのWebSocket DATは大きい応答の受信が不安定なので、"
+                         "密なアート画像では 50〜60 に下げて応答サイズを縮める（2026-09-14の教訓）")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8765)
     return ap.parse_args()
