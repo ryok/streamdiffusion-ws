@@ -114,7 +114,7 @@ ssh -N -L 8765:localhost:8765 gpu-host
 
 ## Write-up
 
-[手の軌跡をAIで塗り替える：TouchDesignerでリアルタイム Hand Tracking × AI Trails を作る](https://zenn.dev/ryok/articles/touchdesigner-hand-trail-ai)
+[指で空中に描いた線を、AIが龍に塗り替える](https://note.com/ryok/n/n9e96b5aeaccc) (note)
 (Japanese) — why I built this instead of paying for a hosted service, and the pitfalls
 along the way.
 
