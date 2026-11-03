@@ -45,7 +45,28 @@ def build_stream(args):
         num_inference_steps=args.steps,
         guidance_scale=args.guidance_scale,
     )
+    # prepare() 直後の1枚はゼロの潜在バッファ由来の茶色になるので、起動時に1枚捨てて埋めておく
+    stream(image=Image.new("RGB", (args.size, args.size)))
     return stream
+
+
+def reprepare(stream, state):
+    """プロンプト・t_index を変えたあとに prepare し直す。
+
+    StreamDiffusion の prepare() は、段をずらして処理するための潜在バッファ
+    (x_t_latent_buffer) をゼロで作り直す。そのまま次の画像を処理すると、ゼロの潜在を
+    デコードした茶色一色の画像が1枚返る（2026-11-03 に確認。平均 RGB ≒ (136,104,85)）。
+    直前のバッファを戻して、切り替え直後も前の流れのまま描かせる。
+    """
+    buf = stream.stream.x_t_latent_buffer
+    buf = buf.clone() if buf is not None else None
+    stream.prepare(prompt=state["prompt"],
+                   negative_prompt=state["negative"],
+                   num_inference_steps=state["steps"],
+                   guidance_scale=state["guidance"])
+    if buf is not None and stream.stream.x_t_latent_buffer is not None \
+            and buf.shape == stream.stream.x_t_latent_buffer.shape:
+        stream.stream.x_t_latent_buffer = buf
 
 
 def b64_to_pil(b64: str, size: int) -> Image.Image:
@@ -71,10 +92,7 @@ async def handler(ws, stream, state):
             # 制御メッセージ: "PROMPT:<text>" プロンプト差替 / "TINDEX:<a>,<b>" スタイル強度
             if message.startswith("PROMPT:"):
                 state["prompt"] = message[len("PROMPT:"):]
-                stream.prepare(prompt=state["prompt"],
-                               negative_prompt=state["negative"],
-                               num_inference_steps=state["steps"],
-                               guidance_scale=state["guidance"])
+                reprepare(stream, state)
                 await ws.send("OK:prompt updated")
                 print(f"\n[ws] prompt -> {state['prompt']}")
                 continue
@@ -91,10 +109,7 @@ async def handler(ws, stream, state):
                     await ws.send(f"ERR:tindex needs {n} values")
                     continue
                 stream.stream.t_list = vals
-                stream.prepare(prompt=state["prompt"],
-                               negative_prompt=state["negative"],
-                               num_inference_steps=state["steps"],
-                               guidance_scale=state["guidance"])
+                reprepare(stream, state)
                 await ws.send(f"OK:tindex {vals}")
                 print(f"\n[ws] t_index -> {vals}")
                 continue
